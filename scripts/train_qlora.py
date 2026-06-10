@@ -50,9 +50,15 @@ def main():
     ds = ds.map(fmt, remove_columns=ds["train"].column_names)
 
     # Response-only loss: mask everything before the assistant turn.
-    # Qwen/Llama chat templates mark the assistant turn; set the template's response head.
-    resp_template = "<|im_start|>assistant\n" if "qwen" in CFG["base_model"].lower() \
-        else "<|start_header_id|>assistant<|end_header_id|>\n\n"
+    # Each model family marks the assistant turn differently — must match the base model's
+    # chat template exactly, or masking fails and the model trains on instructions too.
+    bm = CFG["base_model"].lower()
+    if "phi-3" in bm or "phi3" in bm or "phi-4" in bm:
+        resp_template = "<|assistant|>\n"
+    elif "qwen" in bm:
+        resp_template = "<|im_start|>assistant\n"
+    else:  # llama-style
+        resp_template = "<|start_header_id|>assistant<|end_header_id|>\n\n"
     collator = DataCollatorForCompletionOnlyLM(response_template=resp_template, tokenizer=tok)
 
     args = SFTConfig(

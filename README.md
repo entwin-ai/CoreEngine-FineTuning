@@ -28,7 +28,7 @@ step below is built to strip semantic content and preserve only stylistic signal
 1. extract.py        Pull your sent messages (Gmail / Drive / WhatsApp / Calendar notes)
 2. profile.py        Compute the quantitative Linguistic Fingerprint (the guardrail summary)
 3. build_dataset.py  Turn messages into instruction→response style-transfer pairs
-4. train_qlora.py    QLoRA fine-tune a local base model (Qwen2.5 / Phi-4 / Llama-3.1-8B)
+4. train_qlora.py    QLoRA fine-tune a local base model (Phi-3.5-mini default; Qwen/Llama opt.)
 5. evaluate.py       Score the fine-tune against the measured fingerprint; detect drift
 6. merge_serve.py    Merge adapter, export GGUF for Ollama, ready for local inference
 ```
@@ -83,12 +83,15 @@ accumulated.
 
 ## Hardware note (matches your stack)
 - **Snapdragon X / Surface (ARM, no CUDA):** train in the cloud (one rented A100/4090 for
-  a few hours), then run inference locally via Ollama with the merged GGUF. QLoRA training
-  needs CUDA; ARM is fine for inference only.
-- **One 24GB GPU (4090/A5000) or rented A100:** trains a 7-8B model at QLoRA 4-bit comfortably.
-- Recommended base: **Qwen2.5-7B-Instruct** (best instruction-following at 7B) or
-  **Meta-Llama-3.1-8B-Instruct**. Phi-4-mini works for a lighter footprint but has weaker
-  long-context voice retention.
+  a couple hours), then run inference locally via Ollama (`ollama run phi3.5` style) with the
+  merged GGUF. QLoRA training needs CUDA; ARM is fine for inference only.
+- **Current base: `microsoft/Phi-3.5-mini-instruct` (3.8B).** Being small, it QLoRA-tunes on
+  a single 8-12GB GPU (even a 3060/4060) and runs comfortably for local inference — a good
+  match for "running phi3.5 locally." Trade-off: less long-context voice retention than a 7-8B
+  model, so lean a bit harder on the system-prompt fingerprint guardrail.
+- **Heavier alternatives** (set in `configs/qlora.json` → `base_model`, and swap
+  `target_modules` back to the split-projection names noted there): Qwen2.5-7B-Instruct or
+  Meta-Llama-3.1-8B-Instruct on a 24GB GPU for stronger voice fidelity.
 
 ## Quickstart
 ```bash

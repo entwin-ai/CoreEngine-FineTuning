@@ -39,7 +39,7 @@ DECISION_MARKERS = re.compile(
     r"deadline|budget|hire|fire|sign off|green ?light|no-go|prioriti[sz]e)\b", re.I)
 
 # ---------------- paraphraser backends ----------------
-def paraphrase_ollama(text, model="qwen2.5:7b-instruct"):
+def paraphrase_ollama(text, model=os.environ.get("ENTWIN_OLLAMA_MODEL", "phi3.5")):
     prompt = ("Rewrite the message below in plain, neutral, voice-less English. Keep ALL "
               "facts, names, and intent identical. Strip personality, idiom, and stylistic "
               "flourish. Output only the rewrite.\n\nMESSAGE:\n" + text)

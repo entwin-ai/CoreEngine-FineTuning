@@ -1,6 +1,6 @@
 {
-  "base_model": "Qwen/Qwen2.5-7B-Instruct",
-  "_alt_models": ["meta-llama/Meta-Llama-3.1-8B-Instruct", "microsoft/Phi-4-mini-instruct"],
+  "base_model": "microsoft/Phi-3.5-mini-instruct",
+  "_alt_models": ["Qwen/Qwen2.5-7B-Instruct", "meta-llama/Meta-Llama-3.1-8B-Instruct"],
   "output_dir": "out/adapter",
   "train_file": "data/train.jsonl",
   "val_file": "data/val.jsonl",
@@ -10,7 +10,8 @@
   "lora_r": 16,
   "lora_alpha": 32,
   "lora_dropout": 0.05,
-  "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+  "_comment_targets": "Phi-3.5-mini FUSES projections: qkv_proj (attn) and gate_up_proj (mlp), unlike Qwen/Llama which split them. These names must match the architecture or PEFT errors. If you switch back to a Qwen/Llama base, use: q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj.",
+  "target_modules": ["qkv_proj", "o_proj", "gate_up_proj", "down_proj"],
 
   "load_in_4bit": true,
   "bnb_4bit_quant_type": "nf4",
