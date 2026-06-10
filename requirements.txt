@@ -1,0 +1,17 @@
+torch>=2.3.0
+transformers>=4.44.0
+datasets>=2.20.0
+peft>=0.12.0
+trl>=0.9.6
+bitsandbytes>=0.43.0
+accelerate>=0.33.0
+sentencepiece>=0.2.0
+google-api-python-client>=2.140.0
+google-auth-oauthlib>=1.2.0
+beautifulsoup4>=4.12.0
+nltk>=3.9
+numpy>=1.26.0
+scipy>=1.13.0
+watchdog>=4.0.0
+pdfminer.six>=20240706
+python-docx>=1.1.2
