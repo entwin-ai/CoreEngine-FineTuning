@@ -23,12 +23,14 @@ Run:
 """
 import os, sys, json, time, hashlib, subprocess, threading
 import file_parser
+import monotonic_id
 
 # ----------------- HARDCODED inbox folder (override via env if needed) -----------------
 INBOX = os.environ.get("ENTWIN_INBOX", os.path.expanduser("~/entwin_inbox"))
+# Dedicated HARDCODED folder where files go AFTER reading (separate from the inbox).
+PROCESSED_DIR = os.environ.get("ENTWIN_PROCESSED", os.path.expanduser("~/entwin_processed"))
 RAW = "data/raw_messages.jsonl"
 LEDGER = "data/.processed.json"
-ARCHIVE = os.path.join(INBOX, "_processed")     # files moved here after success
 STABLE_CHECKS = 2          # consecutive equal size readings => file fully written
 STABLE_INTERVAL = 0.8      # seconds between size checks
 POLL_SECONDS = 3.0         # polling-backend scan interval
@@ -112,18 +114,38 @@ def process_file(path):
     added = _append_rows(rows)
     ledger[path] = _sig(path)
     _save_ledger(ledger)
-    _archive(path)
-    print(f"[ingest] {os.path.basename(path)}: parsed {len(rows)} units, +{added} new")
+    moved = _archive(path)   # reading complete -> move to processed folder with sortable prefix
+    where = f" -> {os.path.basename(moved)}" if moved else ""
+    print(f"[ingest] {os.path.basename(path)}: parsed {len(rows)} units, +{added} new{where}")
     return added
 
 def _archive(path):
+    """Move a fully-read file into the hardcoded processed folder, renamed with a
+    monotonically-increasing alphanumeric prefix so that sorting by name == chronological order.
+    Returns the new path, or None if the move was skipped/failed."""
     try:
-        os.makedirs(ARCHIVE, exist_ok=True)
-        dst = os.path.join(ARCHIVE, os.path.basename(path))
-        if os.path.abspath(os.path.dirname(path)) == os.path.abspath(INBOX):
-            os.replace(path, dst)
+        os.makedirs(PROCESSED_DIR, exist_ok=True)
+        uid = monotonic_id.next_id()                 # e.g. "0abc12xyz-0000"
+        base = os.path.basename(path)
+        dst = os.path.join(PROCESSED_DIR, f"{uid}__{base}")
+        # guard against an impossibly-rare same-name collision
+        while os.path.exists(dst):
+            uid = monotonic_id.next_id()
+            dst = os.path.join(PROCESSED_DIR, f"{uid}__{base}")
+        os.replace(path, dst)                        # atomic on same filesystem
+        return dst
+    except OSError:
+        # cross-device move (inbox and processed on different mounts) -> copy + remove
+        try:
+            import shutil
+            shutil.move(path, dst)
+            return dst
+        except Exception as e:
+            print(f"[archive skip] {e}")
+            return None
     except Exception as e:
         print(f"[archive skip] {e}")
+        return None
 
 # ----------------- downstream pipeline -----------------
 def run_pipeline():

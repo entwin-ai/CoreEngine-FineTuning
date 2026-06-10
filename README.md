@@ -42,8 +42,24 @@ Instead of (or in addition to) the one-shot `extract.py` bulk pull, you can drop
 2. waits until each new file is fully written (size-stable — no half-copied reads),
 3. parses it via `file_parser.py` into authored stylistic units (same schema as `extract.py`),
 4. appends them to `data/raw_messages.jsonl`, de-duplicated by normalized text,
-5. archives the file to `inbox/_processed/` and records it in a ledger so it's never re-run,
+5. once reading is complete, **moves** the file to a separate hardcoded processed folder
+   (`~/entwin_processed`, override with `ENTWIN_PROCESSED`), **renaming it with a
+   monotonically-increasing alphanumeric prefix** (`<time36>-<seq36>__originalname`) so that
+   a plain name-sort of that folder always reflects the chronological order files arrived;
+   it also records the file in a ledger so it's never re-run,
 6. after a short debounce (batches a burst of files), triggers the downstream pipeline.
+
+### The sortable identifier (`monotonic_id.py`)
+
+The prefix is `<TIME>-<SEQ>` in base36 (alphabet `0-9a-z`), each field zero-padded to a fixed
+width so lexicographic ordering equals numeric ordering:
+- **TIME** — milliseconds since epoch, 9 base36 chars (good past the year 3000).
+- **SEQ** — a counter that breaks ties when multiple files land in the same millisecond.
+
+It's guaranteed strictly increasing even across restarts and backwards clock jumps (NTP
+corrections): the last-issued value is persisted, and the generator clamps forward rather
+than ever emitting a smaller ID. Net effect: `ls | sort` over the processed folder is always
+true chronological order, regardless of the original filenames.
 
 **Supported file formats** (auto-detected): `.txt`, `.md`, `.json`, `.jsonl`, `.eml`,
 `.csv` (text/body/message/content column), `.html`, `.pdf`, `.docx`, plus WhatsApp `.txt`
@@ -55,6 +71,7 @@ python scripts/watch.py            # watch; run profile + build_dataset on each 
 python scripts/watch.py --full     # also run train + evaluate + merge after each batch
 python scripts/watch.py --once     # process whatever's already in the folder, then exit
 ENTWIN_INBOX=/data/dropzone python scripts/watch.py   # custom folder
+ENTWIN_PROCESSED=/data/done python scripts/watch.py   # custom processed/archive folder
 ```
 
 Backend is auto-selected: real OS filesystem events via `watchdog` if installed, otherwise a
