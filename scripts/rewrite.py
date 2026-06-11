@@ -47,12 +47,24 @@ SYSTEM_BASE = (
     "explanation, no quotes around it."
 )
 
+def _read_text_tolerant(path):
+    """Read a text file even if it was written with a non-UTF-8 Windows encoding.
+    Tries utf-8, utf-8-sig (BOM), then cp1252, then a lossy utf-8 as last resort."""
+    for enc in ("utf-8", "utf-8-sig", "cp1252"):
+        try:
+            with open(path, encoding=enc) as f:
+                return f.read()
+        except UnicodeDecodeError:
+            continue
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
 def _system_prompt():
     """System = style instruction + the measured fingerprint guardrail (if present)."""
     sp = SYSTEM_BASE
     if os.path.exists(GUARDRAIL):
         sp += "\n\n# The author's measured style (follow as a guardrail):\n" + \
-              open(GUARDRAIL, encoding="utf-8").read()
+              _read_text_tolerant(GUARDRAIL)
     return sp
 
 def _user_prompt(paragraph):

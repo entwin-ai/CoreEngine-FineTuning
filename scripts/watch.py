@@ -38,7 +38,7 @@ DEBOUNCE_SECONDS = 4.0     # wait for a burst to settle before running the pipel
 RUN_FULL = "--full" in sys.argv
 
 SUPPORTED = (".txt", ".md", ".json", ".jsonl", ".eml", ".csv",
-             ".html", ".htm", ".pdf", ".docx")
+             ".html", ".htm", ".pdf", ".docx", ".vtt", ".srt")
 
 # ----------------- ledger -----------------
 def _load_ledger():
@@ -140,15 +140,23 @@ def _count_words_tokens(rows):
     n_tokens = int(round(n_words * 1.3))
     return n_words, n_tokens, "est ~1.3x"
 
-def process_file(path):
+def process_file(path, verbose=False):
+    name = os.path.basename(path)
     ext = os.path.splitext(path)[1].lower()
     if ext not in SUPPORTED:
+        if verbose:
+            print(f"[skip] {name}: unsupported type '{ext}' (supported: {', '.join(SUPPORTED)})")
         return 0
     ledger = _load_ledger()
     sig = _sig(path)
     if ledger.get(path) == sig:
-        return 0  # already processed this exact version
+        if verbose:
+            print(f"[skip] {name}: already processed (in ledger). "
+                  f"Rename it, or run with --reset to clear the ledger.")
+        return 0
     if not _wait_stable(path):
+        if verbose:
+            print(f"[skip] {name}: file not stable / unreadable")
         return 0
     rows = file_parser.parse_file(path)
     added = _append_rows(rows)
@@ -157,8 +165,12 @@ def process_file(path):
     moved = _archive(path)   # reading complete -> move to processed folder with sortable prefix
     where = f" -> {os.path.basename(moved)}" if moved else ""
     n_words, n_tokens, tk_method = _count_words_tokens(rows)
-    print(f"[ingest] {os.path.basename(path)}: parsed {len(rows)} units, +{added} new "
-          f"| words={n_words:,} tokens={n_tokens:,} ({tk_method}){where}")
+    if len(rows) == 0:
+        print(f"[ingest] {name}: parsed 0 USABLE units, +0 new — file may be empty, image-only, "
+              f"or a parser library is missing (python-docx/pdfminer.six){where}")
+    else:
+        print(f"[ingest] {name}: parsed {len(rows)} units, +{added} new "
+              f"| words={n_words:,} tokens={n_tokens:,} ({tk_method}){where}")
     return added
 
 def _archive(path):
@@ -237,12 +249,16 @@ def schedule_pipeline():
         _timer.start()
 
 # ----------------- backends -----------------
-def scan_existing():
+def scan_existing(verbose=False):
+    names = [n for n in sorted(os.listdir(INBOX))
+             if os.path.isfile(os.path.join(INBOX, n))]
+    if verbose and not names:
+        print(f"[watch] inbox is empty — nothing to process. "
+              f"Drop files into {INBOX} and re-run.")
     found = 0
-    for name in sorted(os.listdir(INBOX)):
+    for name in names:
         path = os.path.join(INBOX, name)
-        if os.path.isfile(path):
-            found += 1 if process_file(path) else 0
+        found += 1 if process_file(path, verbose=verbose) else 0
     return found
 
 def run_polling():
@@ -307,10 +323,20 @@ def main():
     os.makedirs("data", exist_ok=True)
     print(f"[watch] inbox = {INBOX}")
 
-    pre = scan_existing()          # handle anything already sitting in the folder
+    if "--reset" in sys.argv:
+        if os.path.exists(LEDGER):
+            os.remove(LEDGER)
+            print("[watch] ledger cleared — all files in the inbox will be reprocessed.")
+        else:
+            print("[watch] no ledger to clear.")
+
+    # Startup scan is verbose so skips are visible (esp. with --once).
+    pre = scan_existing(verbose=True)   # handle anything already sitting in the folder
     if pre:
-        print(f"[watch] processed {pre} pre-existing file(s)")
+        print(f"[watch] processed {pre} file(s) this scan")
         run_pipeline()
+    else:
+        print("[watch] no new files ingested this scan.")
 
     if "--once" in sys.argv:
         return

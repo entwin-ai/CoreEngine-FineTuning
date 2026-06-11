@@ -31,7 +31,9 @@ def parse_file(path):
     thread = os.path.basename(path)
     try:
         if ext in (".txt", ".md"):
-            units = _parse_text_or_whatsapp(path)
+            units = _parse_text_whatsapp_or_transcript(path)
+        elif ext in (".vtt", ".srt"):
+            units = _parse_caption_transcript(path)
         elif ext == ".jsonl":
             units = _parse_jsonl(path)
         elif ext == ".json":
@@ -47,7 +49,7 @@ def parse_file(path):
         elif ext == ".docx":
             units = _parse_docx(path)
         else:
-            units = _parse_text_or_whatsapp(path)  # best-effort plain text
+            units = _parse_text_whatsapp_or_transcript(path)  # best-effort plain text
     except Exception as e:
         print(f"[parse error] {path}: {e}")
         return []
@@ -69,13 +71,77 @@ def parse_file(path):
     return rows
 
 # ---------- per-format parsers: each yields (text, is_reply) tuples ----------
-def _parse_text_or_whatsapp(path):
+# A "speaker:" line at the start of a turn, e.g. "Nishit: ..." or "[00:12] Nishit Ghosh: ..."
+_TRANSCRIPT_LINE = re.compile(
+    r"^\s*(?:\[?\d{1,2}:\d{2}(?::\d{2})?\]?\s*)?([A-Z][\w .'-]{1,40}):\s+(.*)$")
+
+def _parse_text_whatsapp_or_transcript(path):
     raw = open(path, encoding="utf-8", errors="ignore").read()
-    # WhatsApp export detection: several lines match the timestamped "sender: msg" pattern
-    wa_hits = sum(1 for ln in raw.splitlines()[:50] if extract.WA_LINE.match(ln.strip()))
+    lines = raw.splitlines()
+    # WhatsApp export detection: timestamped "date - sender: msg" pattern
+    wa_hits = sum(1 for ln in lines[:50] if extract.WA_LINE.match(ln.strip()))
     if wa_hits >= 5:
         return _whatsapp_units(raw)
+    # Transcript detection: many lines look like "Speaker: text" with 2+ distinct speakers
+    tr_hits = [m for ln in lines[:80] if (m := _TRANSCRIPT_LINE.match(ln))]
+    speakers = {m.group(1).strip() for m in tr_hits}
+    if len(tr_hits) >= 3 and len(speakers) >= 2:
+        return _transcript_units(lines)
+    # plain prose
     return [(p.strip(), False) for p in re.split(r"\n\s*\n", raw) if p.strip()]
+
+def _transcript_units(lines):
+    """Speaker-aware: keep ONLY the author's turns (sender in MY_NAMES). A meeting transcript
+    contains many voices; ingesting all of them teaches the twin other people's words."""
+    units, cur = [], None
+    for line in lines:
+        m = _TRANSCRIPT_LINE.match(line)
+        if m:
+            if cur and _is_author(cur["speaker"]):
+                units.append((cur["text"].strip(), True))
+            cur = {"speaker": m.group(1).strip(), "text": m.group(2)}
+        elif cur:
+            cur["text"] += " " + line.strip()
+    if cur and _is_author(cur["speaker"]):
+        units.append((cur["text"].strip(), True))
+    return units
+
+def _parse_caption_transcript(path):
+    """Parse .vtt / .srt caption files. These often carry speaker tags like '<v Nishit>...'
+    (WEBVTT) or 'Nishit: ...' inline. Without speaker tags we cannot attribute turns, so we
+    keep author-tagged cues only; if none are tagged, we skip (can't safely attribute)."""
+    raw = open(path, encoding="utf-8", errors="ignore").read()
+    # strip indices, timestamps, and WEBVTT header
+    cues, cur_speaker, buf = [], None, []
+    voice = re.compile(r"<v\s+([^>]+)>(.*?)(?:</v>|$)", re.I)
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s or s.upper().startswith("WEBVTT") or "-->" in s or s.isdigit():
+            continue
+        vm = voice.search(s)
+        if vm:
+            spk, txt = vm.group(1).strip(), re.sub(r"<[^>]+>", "", vm.group(2)).strip()
+            cues.append((spk, txt))
+        else:
+            im = _TRANSCRIPT_LINE.match(s)
+            if im:
+                cues.append((im.group(1).strip(), im.group(2).strip()))
+    # merge consecutive cues by same speaker, keep only the author's
+    units, cur = [], None
+    for spk, txt in cues:
+        if cur and cur["speaker"] == spk:
+            cur["text"] += " " + txt
+        else:
+            if cur and _is_author(cur["speaker"]):
+                units.append((cur["text"].strip(), True))
+            cur = {"speaker": spk, "text": txt}
+    if cur and _is_author(cur["speaker"]):
+        units.append((cur["text"].strip(), True))
+    return units
+
+def _is_author(name):
+    n = (name or "").strip().lower()
+    return any(n == mn.lower() or mn.lower() in n for mn in MY_NAMES)
 
 def _whatsapp_units(raw):
     units, cur = [], None

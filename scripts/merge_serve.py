@@ -44,8 +44,8 @@ python convert_hf_to_gguf.py ../out/entwin-merged --outfile ../out/entwin.gguf -
 """
 
 def write_modelfile():
-    guard = open("prompts/style_guardrail.md").read() if os.path.exists(
-        "prompts/style_guardrail.md") else "Write in the user's authentic voice."
+    guard = open("prompts/style_guardrail.md", encoding="utf-8", errors="replace").read() \
+        if os.path.exists("prompts/style_guardrail.md") else "Write in the user's authentic voice."
     mf = (f"FROM ./entwin-q4_k_m.gguf\n"
           f'SYSTEM """{guard}\n\n'
           f'Convey only the meaning you are given. Never invent facts, names, dates, '

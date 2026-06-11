@@ -143,7 +143,7 @@ def main():
     rows = load()
     fp = measure(rows)
     json.dump(fp, open("data/fingerprint.json", "w"), indent=2, ensure_ascii=False)
-    open("prompts/style_guardrail.md", "w").write(to_guardrail_md(fp))
+    open("prompts/style_guardrail.md", "w", encoding="utf-8").write(to_guardrail_md(fp))
     print("wrote data/fingerprint.json and prompts/style_guardrail.md")
     print(json.dumps({k: fp[k] for k in
           ["n_messages", "sentence_length", "punctuation_per_1k_words",
