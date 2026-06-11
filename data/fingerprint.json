@@ -1,0 +1,153 @@
+{
+  "n_messages": 544,
+  "n_words": 31448,
+  "sentence_length": {
+    "mean": 18.6,
+    "median": 17.0,
+    "stdev": 11.5,
+    "p90": 33
+  },
+  "contraction_rate_per_1k_words": 0.0,
+  "punctuation_per_1k_words": {
+    "em_dash": 1.46,
+    "semicolon": 0.29,
+    "ellipsis": 0.41,
+    "exclamation": 0.19,
+    "comma": 60.77
+  },
+  "passive_voice_ratio": 0.095,
+  "bullet_line_fraction": 0.006,
+  "question_to_terminal_ratio": 0.051,
+  "long_word_fraction": 0.119,
+  "avg_paragraph_words": 57.8,
+  "top_openings": [
+    {
+      "phrase": "in humans, this primordial sense of",
+      "count": 2
+    },
+    {
+      "phrase": "patterns are the building blocks of",
+      "count": 2
+    },
+    {
+      "phrase": "ai inverts the relationship between data",
+      "count": 2
+    }
+  ],
+  "top_closings": [
+    {
+      "phrase": "central endowment of the transformer architecture.",
+      "count": 2
+    },
+    {
+      "phrase": "than the sum of its parts.",
+      "count": 2
+    },
+    {
+      "phrase": "with your product at the center.",
+      "count": 2
+    }
+  ],
+  "signature_phrases": [
+    {
+      "phrase": "is the",
+      "count": 72
+    },
+    {
+      "phrase": "it s",
+      "count": 72
+    },
+    {
+      "phrase": "is a",
+      "count": 71
+    },
+    {
+      "phrase": "in a",
+      "count": 60
+    },
+    {
+      "phrase": "of a",
+      "count": 54
+    },
+    {
+      "phrase": "as a",
+      "count": 50
+    },
+    {
+      "phrase": "you can",
+      "count": 48
+    },
+    {
+      "phrase": "on the",
+      "count": 47
+    },
+    {
+      "phrase": "to be",
+      "count": 47
+    },
+    {
+      "phrase": "the ai",
+      "count": 47
+    },
+    {
+      "phrase": "it is",
+      "count": 44
+    },
+    {
+      "phrase": "the user",
+      "count": 44
+    },
+    {
+      "phrase": "can be",
+      "count": 43
+    },
+    {
+      "phrase": "of ai",
+      "count": 42
+    },
+    {
+      "phrase": "from the",
+      "count": 39
+    },
+    {
+      "phrase": "that is",
+      "count": 37
+    },
+    {
+      "phrase": "at the",
+      "count": 36
+    },
+    {
+      "phrase": "as the",
+      "count": 36
+    },
+    {
+      "phrase": "will be",
+      "count": 34
+    },
+    {
+      "phrase": "they are",
+      "count": 33
+    },
+    {
+      "phrase": "with the",
+      "count": 32
+    },
+    {
+      "phrase": "of this",
+      "count": 32
+    },
+    {
+      "phrase": "of language",
+      "count": 30
+    },
+    {
+      "phrase": "want to",
+      "count": 27
+    },
+    {
+      "phrase": "of meaning",
+      "count": 27
+    }
+  ]
+}

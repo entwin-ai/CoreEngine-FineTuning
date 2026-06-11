@@ -100,6 +100,46 @@ def _text_key(t):
     return hashlib.sha1(" ".join(t.split()).lower().encode()).hexdigest()
 
 # ----------------- process one file -----------------
+# ----------------- word / token counting -----------------
+import re as _re
+_TOKENIZER = None
+_TK_TRIED = False
+
+def _get_tokenizer():
+    """Load the base model's real tokenizer once (Phi-3.5 by default). Returns None if
+    transformers/model files aren't available, so counting still works offline."""
+    global _TOKENIZER, _TK_TRIED
+    if _TK_TRIED:
+        return _TOKENIZER
+    _TK_TRIED = True
+    try:
+        import json as _json
+        cfg = _json.load(open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "configs", "qlora.json")))
+        model_id = cfg.get("base_model", "microsoft/Phi-3.5-mini-instruct")
+        from transformers import AutoTokenizer
+        _TOKENIZER = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    except Exception:
+        _TOKENIZER = None  # no transformers, offline, or model not cached -> estimate
+    return _TOKENIZER
+
+def _count_words_tokens(rows):
+    """Return (n_words, n_tokens, method) across all parsed units of a document.
+    Tokens use the real model tokenizer when available; otherwise a calibrated estimate."""
+    text = "\n".join(r["text"] for r in rows)
+    n_words = len(_re.findall(r"\b[\w']+\b", text))
+    tk = _get_tokenizer()
+    if tk is not None:
+        try:
+            n_tokens = len(tk.encode(text, add_special_tokens=False))
+            return n_words, n_tokens, "Phi-3.5 tokenizer"
+        except Exception:
+            pass
+    # Estimate: ~1.3 tokens/word is a good rule of thumb for English subword tokenizers.
+    n_tokens = int(round(n_words * 1.3))
+    return n_words, n_tokens, "est ~1.3x"
+
 def process_file(path):
     ext = os.path.splitext(path)[1].lower()
     if ext not in SUPPORTED:
@@ -116,7 +156,9 @@ def process_file(path):
     _save_ledger(ledger)
     moved = _archive(path)   # reading complete -> move to processed folder with sortable prefix
     where = f" -> {os.path.basename(moved)}" if moved else ""
-    print(f"[ingest] {os.path.basename(path)}: parsed {len(rows)} units, +{added} new{where}")
+    n_words, n_tokens, tk_method = _count_words_tokens(rows)
+    print(f"[ingest] {os.path.basename(path)}: parsed {len(rows)} units, +{added} new "
+          f"| words={n_words:,} tokens={n_tokens:,} ({tk_method}){where}")
     return added
 
 def _archive(path):
@@ -164,6 +206,23 @@ def run_pipeline():
             print(f"  [stop] {script} exited {rc}; fix before continuing.")
             return
     print("[pipeline] batch complete.")
+    _print_corpus_totals()
+
+def _print_corpus_totals():
+    """Show cumulative word/token totals across the whole corpus so far."""
+    if not os.path.exists(RAW):
+        return
+    rows = []
+    for line in open(RAW, encoding="utf-8"):
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            pass
+    if not rows:
+        return
+    n_words, n_tokens, method = _count_words_tokens(rows)
+    print(f"[corpus] total: {len(rows):,} units | {n_words:,} words | "
+          f"{n_tokens:,} tokens ({method})")
 
 # ----------------- debounced trigger -----------------
 _timer = None
