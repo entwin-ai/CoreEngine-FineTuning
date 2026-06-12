@@ -55,7 +55,7 @@ def retrieve_context(query, recipient_hint=None, max_chunks=None):
     # --- decision_judgment: precedent decisions only ---
     spec = config.PILLAR_RETRIEVAL["decision_judgment"]
     lenses["decision_judgment"] = db.search(qvec, k=spec["k"],
-                                            where_sql="is_decision = true")
+                                            where={"is_decision": True})
 
     # --- cognitive_style: reasoning on analogous problems (semantic, longer chunks) ---
     spec = config.PILLAR_RETRIEVAL["cognitive_style"]
@@ -65,8 +65,7 @@ def retrieve_context(query, recipient_hint=None, max_chunks=None):
     spec = config.PILLAR_RETRIEVAL["affective_register"]
     if recipient_hint:
         lenses["affective_register"] = db.search(
-            qvec, k=spec["k"],
-            where_sql="recipient_hint = %s", where_params=[recipient_hint])
+            qvec, k=spec["k"], where={"recipient_hint": recipient_hint})
     else:
         lenses["affective_register"] = []
 

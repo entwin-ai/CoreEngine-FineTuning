@@ -6,7 +6,8 @@ past decisions, prior reasoning, recipient-specific tone — so the stylistic tw
 "sound exactly like the user while saying things the user would never say."
 
 It reuses your **locally installed SLM** (Phi-3.5 via Ollama) for embeddings, stores vectors in
-**PostgreSQL + PGVector**, and retrieves through the lenses the Excel assigns to RAG.
+**ChromaDB** (a local, embedded vector store — no server, no Postgres), and retrieves through the
+lenses the Excel assigns to RAG.
 
 ---
 
@@ -15,7 +16,7 @@ It reuses your **locally installed SLM** (Phi-3.5 via Ollama) for embeddings, st
 | Pillar | RAG's job (per Excel) | How this code does it |
 |---|---|---|
 | **Knowledge & Context** | The underweighted foundation — build first | Semantic similarity over all chunks |
-| **Decision & Judgment** | Retrieve **precedent** so the twin doesn't contradict past decisions | Similarity search filtered to `is_decision = true` |
+| **Decision & Judgment** | Retrieve **precedent** so the twin doesn't contradict past decisions | Similarity search filtered to `is_decision = True` |
 | **Cognitive Style** | Retrieve **similar past reasoning** for novel situations | Semantic similarity (reasoning-bearing chunks) |
 | **Affective Register** | RAG for **relationship-specific calibration** | Similarity filtered to the same `recipient_hint` |
 
@@ -24,68 +25,47 @@ The retriever runs all four lenses, dedupes, and assembles one context block (`r
 
 ---
 
-## Part 1 — Install PostgreSQL + PGVector (Windows)
+## Part 1 — Install ChromaDB (no database server!)
 
-### 1.1 Install PostgreSQL
-1. Download the **PostgreSQL 16** Windows installer from EDB:
-   `https://www.enterprisedb.com/downloads/postgres-postgresql-downloads`
-2. Run it. When prompted:
-   - Set a **password** for the `postgres` superuser (remember it).
-   - Keep the default **port 5432**.
-   - Include **"Command Line Tools"** and **"pgAdmin 4"** (handy GUI).
-3. After install, add PostgreSQL's `bin` to PATH (so `psql` works in PowerShell), e.g.:
-   ```powershell
-   $env:Path += ";C:\Program Files\PostgreSQL\16\bin"
-   ```
-   (Add it permanently via System → Environment Variables for future sessions.)
+Chroma is an **embedded** vector database: it runs inside your Python process and stores data as
+a folder on disk. There is **no PostgreSQL, no extension, no Docker, no service to start.** This
+is why we switched to it — it sidesteps the entire native-database install problem on Windows.
 
-### 1.2 Install the PGVector extension
-PGVector isn't bundled with the Windows installer, so install the prebuilt binary:
-
-**Easiest path — StackBuilder / prebuilt DLL:**
-1. Download the PGVector Windows release matching your PG major version from
-   `https://github.com/pgvector/pgvector/releases` (look for a Windows `.zip`, e.g.
-   `vector-vX.X.X-pg16-windows-x64.zip`).
-2. Unzip. Copy the files into your PostgreSQL install:
-   - `vector.dll` → `C:\Program Files\PostgreSQL\16\lib\`
-   - `vector.control` and `vector--*.sql` → `C:\Program Files\PostgreSQL\16\share\extension\`
-3. Restart the PostgreSQL service:
-   ```powershell
-   Restart-Service postgresql-x64-16
-   ```
-
-> If no prebuilt binary exists for your version, the alternative is building from source with
-> MSVC + `nmake` (the pgvector README documents this), or running Postgres+pgvector via Docker
-> (`docker run -e POSTGRES_PASSWORD=entwin -p 5432:5432 pgvector/pgvector:pg16`). Docker is the
-> least painful if the DLL route gives trouble.
-
-### 1.3 Create the database and user
-Open `psql` as the `postgres` superuser:
+### 1.1 SQLite — already included, nothing to install
+Chroma uses SQLite (>= 3.35) under the hood, and **SQLite ships inside Python** — you do not
+install it separately. Confirm your version is fine (in your 3.12 venv):
 ```powershell
-psql -U postgres
+.venv312\Scripts\Activate.ps1
+python -c "import sqlite3; print('SQLite engine:', sqlite3.sqlite_version)"
 ```
-Then run:
-```sql
-CREATE USER entwin WITH PASSWORD 'entwin';
-CREATE DATABASE entwin OWNER entwin;
-\c entwin
-CREATE EXTENSION vector;     -- enables PGVector in this DB
-\q
+Any value **3.35 or higher** is good (Python 3.12 ships ~3.45). If it were ever lower, the fix is
+to use the 3.12 venv — not to install SQLite by hand.
+
+### 1.2 Install Chroma
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -r rag\requirements.txt   # installs chromadb
 ```
-If `CREATE EXTENSION vector;` succeeds, PGVector is installed correctly. (The build script
-also runs `CREATE EXTENSION IF NOT EXISTS vector;`, so this is just a confirmation.)
+Use `python -m pip` so it lands in *this* venv. Chroma installs from prebuilt wheels — no
+compiler, unlike the PGVector route.
+
+### 1.3 Verify it works (storage + search, fully local)
+```powershell
+python -c "import chromadb; c=chromadb.PersistentClient(path='./chroma_db'); col=c.get_or_create_collection('smoke'); col.add(ids=['a','b'], embeddings=[[0.1,0.2,0.3],[0.9,0.8,0.7]], documents=['hello','world']); print('CHROMA OK:', col.query(query_embeddings=[[0.1,0.2,0.3]], n_results=1)['documents'][0][0])"
+```
+`CHROMA OK: hello` means storage, metadata, and similarity search all work. A `./chroma_db`
+folder now exists — that folder **is** the database (copy it to back up, delete it to reset).
 
 ---
 
-## Part 2 — Python frameworks
+## Part 2 — Where the database lives
 
-From your project root, in the **3.12 venv** you already use:
+The Chroma database is just a folder, by default `chroma_db/` in your project root. Override the
+location with `ENTWIN_CHROMA_PATH` if you want it elsewhere:
 ```powershell
-.venv312\Scripts\Activate.ps1
-python -m pip install -r rag\requirements.txt
+$env:ENTWIN_CHROMA_PATH = "C:\entwin\data\chroma_db"
 ```
-That installs `psycopg2-binary` (the Postgres driver). Embeddings and generation go through
-Ollama over HTTP, so there's no heavyweight ML dependency here — keeps it light.
+No connection string, port, user, or password — there's no server to connect to.
 
 ---
 
@@ -112,7 +92,7 @@ The RAG layer reads the same corpus your watcher produces: `data/raw_messages.js
 So ingest documents first (drop them in the LandingZone, let `watch.py` parse them), then:
 
 ```powershell
-# from project root, venv active, Ollama running, Postgres running
+# from project root, venv active, Ollama running (no DB server needed)
 python -m rag.build_index
 ```
 You'll see it detect the embedding dimension, chunk the corpus (sentence-aware, ~180-word
@@ -168,7 +148,7 @@ trained the adapter, `--then-restyle` falls back to the base model + style guard
 
 | Var | Default | Meaning |
 |---|---|---|
-| `ENTWIN_PG_HOST/PORT/DB/USER/PASSWORD` | localhost/5432/entwin/entwin/entwin | Postgres connection |
+| `ENTWIN_CHROMA_PATH` | `<project>/chroma_db` | folder where the Chroma DB lives |
 | `ENTWIN_EMBED_MODEL` | `phi3.5` | local embedding model (try `nomic-embed-text`) |
 | `ENTWIN_OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint |
 | `ENTWIN_SLM_MODEL` | `phi3.5` | local model used for grounded generation |
@@ -184,9 +164,9 @@ rag/
   config.py        connection, embedding model, pillar->retrieval mapping
   embeddings.py    local embeddings via Ollama
   chunking.py      sentence-aware splitting + overlap + decision/recipient tagging
-  db.py            PGVector schema, upsert, pillar-filtered similarity search
-  build_index.py   corpus -> chunks -> embeddings -> PGVector -> ANN index
+  db.py            ChromaDB storage, upsert, pillar-filtered similarity search
+  build_index.py   corpus -> chunks -> embeddings -> ChromaDB
   retrieve.py      pillar-aware multi-lens retrieval, assembles context block
   respond.py       RAG-grounded generation with the local SLM (+ optional restyle)
-  requirements.txt psycopg2-binary
+  requirements.txt chromadb
 ```

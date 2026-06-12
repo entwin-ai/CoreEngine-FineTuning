@@ -1,113 +1,139 @@
 """
-rag/db.py — PGVector storage + retrieval.
+rag/db.py — ChromaDB storage + retrieval (replaces the PGVector backend).
 
-Schema (one table + a meta table):
-  entwin_meta(key text primary key, value text)         -- stores embed_model + embed_dim
-  entwin_chunks(
-      id bigserial primary key,
-      source_id text, chunk_ix int,
-      text text,
-      source text, ts bigint, recipient_hint text, thread_id text,
-      is_decision boolean,
-      embedding vector(<dim>)
-  )
+Chroma is a local, embedded vector DB: no server, no Postgres, no extension. The database is
+just a folder on disk (config.CHROMA_PATH). We keep the SAME function names the rest of the RAG
+layer already calls (init_schema, get_meta, clear_all, existing_source_ids, insert_chunks,
+create_ann_index, search) so build_index.py needs no changes.
 
-Index: IVFFlat on embedding with cosine ops for fast ANN search.
+Pillar filters: instead of SQL WHERE strings, search() takes a Chroma `where` dict
+(e.g. {"is_decision": True} or {"recipient_hint": "ab12cd34"}). retrieve.py passes these.
 
-Retrieval is pillar-aware: callers pass an optional WHERE filter (e.g. is_decision = true for
-the Decision & Judgment pillar, or recipient_hint = '...' for Affective Register calibration).
+We store our OWN embeddings (computed locally via Ollama in embeddings.py), so Chroma never
+embeds anything itself — we always pass precomputed vectors.
 """
-import psycopg2
-from psycopg2.extras import execute_values, RealDictCursor
+import chromadb
 from . import config
 
+_CLIENT = None
+_COLLECTION = "entwin_chunks"
+
 def connect():
-    return psycopg2.connect(config.pg_dsn())
+    """Return a persistent Chroma client rooted at config.CHROMA_PATH (a folder on disk)."""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = chromadb.PersistentClient(path=config.CHROMA_PATH)
+    return _CLIENT
+
+def _collection():
+    client = connect()
+    # cosine space matches how we score similarity; metadata holds pillar-filter fields.
+    return client.get_or_create_collection(
+        name=_COLLECTION, metadata={"hnsw:space": "cosine"})
 
 def init_schema(dim):
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS entwin_meta(
-                key text PRIMARY KEY, value text);""")
-        cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS entwin_chunks(
-                id bigserial PRIMARY KEY,
-                source_id text, chunk_ix int,
-                text text NOT NULL,
-                source text, ts bigint, recipient_hint text, thread_id text,
-                is_decision boolean DEFAULT false,
-                embedding vector({dim})
-            );""")
-        # store the embedding model + dim so re-runs detect mismatch
-        cur.execute("""INSERT INTO entwin_meta(key,value) VALUES('embed_model',%s)
-                       ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value;""",
-                    (config.EMBED_MODEL,))
-        cur.execute("""INSERT INTO entwin_meta(key,value) VALUES('embed_dim',%s)
-                       ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value;""",
-                    (str(dim),))
-        conn.commit()
+    """Chroma has no fixed schema; the collection is created lazily. We just record the
+    embedding model + dim in a tiny meta collection so a model-switch is detectable."""
+    _collection()  # ensure it exists
+    client = connect()
+    meta = client.get_or_create_collection("entwin_meta")
+    try:
+        meta.upsert(ids=["meta"], embeddings=[[0.0]],
+                    metadatas=[{"embed_model": config.EMBED_MODEL, "embed_dim": int(dim)}],
+                    documents=["meta"])
+    except Exception:
+        meta.add(ids=["meta"], embeddings=[[0.0]],
+                 metadatas=[{"embed_model": config.EMBED_MODEL, "embed_dim": int(dim)}],
+                 documents=["meta"])
 
 def get_meta(key):
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT value FROM entwin_meta WHERE key=%s;", (key,))
-        row = cur.fetchone()
-        return row[0] if row else None
+    client = connect()
+    try:
+        meta = client.get_collection("entwin_meta")
+        got = meta.get(ids=["meta"], include=["metadatas"])
+        if got and got.get("metadatas"):
+            return got["metadatas"][0].get(key)
+    except Exception:
+        return None
+    return None
 
 def create_ann_index(lists=100):
-    """Build the IVFFlat index AFTER bulk insert (recommended order for IVFFlat)."""
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute("""CREATE INDEX IF NOT EXISTS entwin_chunks_emb_idx
-                       ON entwin_chunks USING ivfflat (embedding vector_cosine_ops)
-                       WITH (lists = %s);""", (lists,))
-        cur.execute("CREATE INDEX IF NOT EXISTS entwin_chunks_decision_idx ON entwin_chunks(is_decision);")
-        cur.execute("CREATE INDEX IF NOT EXISTS entwin_chunks_recipient_idx ON entwin_chunks(recipient_hint);")
-        conn.commit()
+    """No-op for Chroma: it builds/maintains its HNSW index automatically on insert.
+    Kept so build_index.py can call it unchanged."""
+    return
 
 def clear_all():
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute("TRUNCATE entwin_chunks RESTART IDENTITY;")
-        conn.commit()
+    """Drop and recreate the chunks collection."""
+    client = connect()
+    try:
+        client.delete_collection(_COLLECTION)
+    except Exception:
+        pass
+    _collection()
 
 def existing_source_ids():
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT source_id FROM entwin_chunks;")
-        return {r[0] for r in cur.fetchall()}
+    """Return the set of source_ids already indexed (for incremental builds)."""
+    col = _collection()
+    try:
+        got = col.get(include=["metadatas"])
+    except Exception:
+        return set()
+    ids = set()
+    for md in (got.get("metadatas") or []):
+        if md and "source_id" in md:
+            ids.add(md["source_id"])
+    return ids
 
 def insert_chunks(records, vectors):
-    """records: list of chunk dicts (from chunking.chunk_message); vectors: parallel embeddings."""
-    rows = []
+    """records: chunk dicts from chunking.chunk_message; vectors: parallel precomputed embeddings."""
+    col = _collection()
+    ids, embs, docs, metas = [], [], [], []
     for rec, vec in zip(records, vectors):
-        rows.append((
-            rec["source_id"], rec["chunk_ix"], rec["text"], rec["source"],
-            rec["ts"], rec["recipient_hint"], rec["thread_id"], rec["is_decision"],
-            _vec_literal(vec),
-        ))
-    with connect() as conn, conn.cursor() as cur:
-        execute_values(cur, """
-            INSERT INTO entwin_chunks
-              (source_id, chunk_ix, text, source, ts, recipient_hint, thread_id, is_decision, embedding)
-            VALUES %s;""", rows, template="(%s,%s,%s,%s,%s,%s,%s,%s,%s::vector)")
-        conn.commit()
-    return len(rows)
+        cid = f"{rec['source_id']}::{rec['chunk_ix']}"
+        ids.append(cid)
+        embs.append(list(vec))
+        docs.append(rec["text"])
+        metas.append({
+            "source_id": rec["source_id"],
+            "chunk_ix": rec["chunk_ix"],
+            "source": rec.get("source", ""),
+            "ts": int(rec.get("ts", 0) or 0),
+            "recipient_hint": rec.get("recipient_hint", "") or "",
+            "thread_id": rec.get("thread_id", "") or "",
+            "is_decision": bool(rec.get("is_decision", False)),
+        })
+    B = 256  # batch inserts to stay under Chroma's max batch size on large corpora
+    for i in range(0, len(ids), B):
+        col.upsert(ids=ids[i:i+B], embeddings=embs[i:i+B],
+                   documents=docs[i:i+B], metadatas=metas[i:i+B])
+    return len(ids)
 
-def _vec_literal(vec):
-    return "[" + ",".join(f"{x:.6f}" for x in vec) + "]"
-
-def search(query_vec, k=6, where_sql=None, where_params=None):
-    """Cosine-similarity search with an optional pillar filter.
-    Returns rows with text, metadata, and similarity (1 - cosine_distance)."""
-    where = f"WHERE {where_sql}" if where_sql else ""
-    sql = f"""
-        SELECT text, source, ts, recipient_hint, thread_id, is_decision,
-               1 - (embedding <=> %s::vector) AS similarity
-        FROM entwin_chunks
-        {where}
-        ORDER BY embedding <=> %s::vector
-        LIMIT %s;"""
-    # query vector appears in SELECT and ORDER BY; filter params come first in the WHERE
-    qlit = _vec_literal(query_vec)
-    params = [qlit] + list(where_params or []) + [qlit, k]
-    with connect() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(sql, params)
-        return cur.fetchall()
+def search(query_vec, k=6, where=None):
+    """Cosine similarity search with an optional Chroma metadata filter `where`
+    (e.g. {"is_decision": True} or {"recipient_hint": "ab12cd34"}).
+    Returns rows shaped like the old PGVector backend: text, metadata, similarity."""
+    col = _collection()
+    kwargs = {"query_embeddings": [list(query_vec)], "n_results": k,
+              "include": ["documents", "metadatas", "distances"]}
+    if where:
+        kwargs["where"] = where
+    try:
+        res = col.query(**kwargs)
+    except Exception:
+        return []
+    out = []
+    docs = (res.get("documents") or [[]])[0]
+    metas = (res.get("metadatas") or [[]])[0]
+    dists = (res.get("distances") or [[]])[0]
+    for doc, md, dist in zip(docs, metas, dists):
+        md = md or {}
+        out.append({
+            "text": doc,
+            "source": md.get("source", ""),
+            "ts": md.get("ts", 0),
+            "recipient_hint": md.get("recipient_hint", ""),
+            "thread_id": md.get("thread_id", ""),
+            "is_decision": md.get("is_decision", False),
+            "similarity": 1.0 - float(dist) if dist is not None else 0.0,
+        })
+    return out

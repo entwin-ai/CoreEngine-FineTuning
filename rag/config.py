@@ -6,17 +6,11 @@ and the pillar->retrieval mapping that comes straight from the Excel (CORE sheet
 """
 import os
 
-# ---------------- PGVector / Postgres connection ----------------
-PG = {
-    "host": os.environ.get("ENTWIN_PG_HOST", "localhost"),
-    "port": int(os.environ.get("ENTWIN_PG_PORT", "5432")),
-    "dbname": os.environ.get("ENTWIN_PG_DB", "entwin"),
-    "user": os.environ.get("ENTWIN_PG_USER", "entwin"),
-    "password": os.environ.get("ENTWIN_PG_PASSWORD", "entwin"),
-}
-def pg_dsn():
-    return (f"host={PG['host']} port={PG['port']} dbname={PG['dbname']} "
-            f"user={PG['user']} password={PG['password']}")
+# ---------------- ChromaDB (local, embedded — no server) ----------------
+# The "database" is just this folder on disk. Back it up by copying it; reset by deleting it.
+CHROMA_PATH = os.environ.get(
+    "ENTWIN_CHROMA_PATH",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_db"))
 
 # ---------------- Embeddings (LOCAL via Ollama) ----------------
 # "Reuse the same locally installed SLM": default to phi3.5 via Ollama's /api/embeddings.

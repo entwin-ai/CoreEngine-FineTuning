@@ -38,12 +38,12 @@ def main():
     dim = embeddings.detect_dim()
     print(f"[rag] detected embedding dimension: {dim}")
 
-    db.init_schema(dim)
     prev_model = db.get_meta("embed_model")
     prev_dim = db.get_meta("embed_dim")
     if not rebuild and prev_dim and int(prev_dim) != dim:
         sys.exit(f"[error] index was built with dim {prev_dim} ({prev_model}) but current "
                  f"model gives dim {dim}. Re-run with --rebuild to switch embedding models.")
+    db.init_schema(dim)
 
     if rebuild:
         print("[rag] --rebuild: clearing existing chunks")
